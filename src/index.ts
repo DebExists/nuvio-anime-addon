@@ -809,6 +809,32 @@ async function fetchTopRatedAnime(page: number = 1): Promise<JikanAnime[]> {
 }
 
 async function fetchUpcomingAnime(page: number = 1): Promise<JikanAnime[]> {
-  const cacheKey = `jikan_upcoming_${page}`;
-  const cached = cacheManager.get<JikanAnime[]>(cacheKey);
-  if (ca
+    const cacheKey = `jikan_upcoming_${page}`;
+    const cached = cacheManager.get<JikanAnime[]>(cacheKey);
+    if (cached) return cached;
+
+    try {
+        const response = await axios.get<JikanTopAnimeResponse>(
+            `${JIKAN_BASE_URL}/seasons/upcoming?page=${page}&limit=25`,
+            {
+                timeout: 12000,
+                headers: { "Accept-Encoding": "gzip, deflate" }
+            }
+        );
+
+        const anime = response.data.data || [];
+        if (anime.length > 0) {
+            cacheManager.set(cacheKey, anime, 1800000);
+        }
+        return anime;
+    } catch (error) {
+        if (axios.isAxiosError(error)) {
+            console.error('[Jikan] Error fetching upcoming anime:', error.message);
+        }
+        return [];
+    }
+}
+
+const port: number = parseInt(process.env.PORT || '8000', 10);
+serveHTTP(builder.getInterface(), { port });
+console.log(`Anime Addon running on cloud port ${port}`);
