@@ -352,25 +352,22 @@ app.get('/manifest.json', (req, res) => {
 });
 
 
-// ============================================================
+// ==========================================
 // 6. CATALOG ROUTE
-//    GET /catalog/:type/:id/:extra?.json
-// ============================================================
-
+// ==========================================
 app.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     const { type, id, extra } = req.params;
     console.log(`Catalog Request - ID: ${id}, Extra: ${extra}`);
 
     try {
         let searchQuery = "";
-        
-        // Safely extract and decode the search query from Nuvio format
         if (extra && extra.includes('search=')) {
-            const rawQuery = extra.split('search=')[1];
-            searchQuery = decodeURIComponent(rawQuery).replace(/\+/g, ' ');
+            const splitParts = extra.split('search=');
+            if (splitParts.length > 1) {
+                searchQuery = decodeURIComponent(splitParts[1]).replace(/\+/g, ' ').trim();
+            }
         }
 
-        // GraphQL Query for AniList
         const query = `
           query ($search: String, $sort: [MediaSort]) {
             Page (page: 1, perPage: 20) {
@@ -384,10 +381,7 @@ app.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
           }
         `;
 
-        const variables = searchQuery 
-            ? { search: searchQuery } 
-            : { sort: ["TRENDING_DESC"] };
-
+        const variables = searchQuery ? { search: searchQuery } : { sort: ["TRENDING_DESC"] };
         const response = await axios.post('https://anilist.co', { query, variables });
         const animeList = response.data?.data?.Page?.media || [];
 
@@ -399,202 +393,101 @@ app.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
         }));
 
         res.json({ metas });
-
     } catch (error) {
         console.error("Catalog processing error:", error.message);
         res.json({ metas: [] });
     }
 });
 
-
-
-// ============================================================
-// 7. META ROUTE
-//    GET /meta/:type/:id.json
-//
-//  KEY BEHAVIOURS:
-//  • Cache-first: serves from memory if entry is < 24 h old.
-//  • Movie switch: format=MOVIE → no videos array (single Play button).
-//  • Series switch: TV/TV_SHORT/OVA/SPECIAL → full videos array.
-//  • Every episode id is built via getKitsuMapping() so downstream
-//    scrapers receive the correct absolute episode number.
-// ============================================================
-
+// ==========================================
+// 7. META ROUTE (With Stream Provider Mapping)
+// ==========================================
 app.get('/meta/:type/:id.json', async (req, res) => {
-  const { type, id } = req.params;
-  console.log(`[META] type=${type}  id=${id}`);
+    const { type, id } = req.params;
+    console.log(`Meta Request - Type: ${type}, ID: ${id}`);
 
-  // Parse AniList numeric ID from formats: "anilist:21" or "21"
-  const rawId     = id.includes(':') ? id.split(':').pop() : id;
-  const aniListId = parseInt(rawId, 10);
+    try {
+        const rawId = id.includes(':') ? id.split(':').pop() : id;
+        const aniListId = parseInt(rawId, 10);
 
-  if (isNaN(aniListId)) {
-    return res.status(400).json({ error: `Cannot parse AniList ID from: ${id}` });
-  }
+        if (isNaN(aniListId)) {
+            return res.status(400).json({ error: "Cannot parse AniList ID" });
+        }
 
-  // --- Cache check -------------------------------------------
-  const cacheKey = `meta:anilist:${aniListId}`;
-  const cached   = cache.get(cacheKey);
-  if (cached) {
-    console.log(`[META] Cache hit for ${aniListId}`);
-    return res.json(cached);
-  }
+        // Check local cache shield first
+        const cachedData = cache.get(`meta:${aniListId}`);
+        if (cachedData) return res.json(cachedData);
 
-  // --- Fetch from AniList ------------------------------------
-  let data;
-  try {
-    data = await queryAniList(META_QUERY, { id: aniListId });
-  } catch (err) {
-    console.error('[META] AniList error:', err.message);
-    if (err.message === 'RATE_LIMITED') {
-      return res.status(429).json({
-        error:   'Rate limited',
-        message: 'AniList rate limit hit. Retry in ~60 s.',
-        id,
-      });
+        // Fetch rich data PLUS the idMal (MyAnimeList ID) needed by scrapers
+        const query = `
+          query ($id: Int) {
+            Media (id: $id, type: ANIME) {
+              id
+              idMal
+              title { romaji english }
+              description
+              bannerImage
+              coverImage { large }
+              format
+              episodes
+              genres
+            }
+          }
+        `;
+
+        const response = await axios.post('https://anilist.co', { query, variables: { id: aniListId } });
+        const anime = response.data?.data?.Media;
+
+        if (!anime) return res.status(404).json({ error: "Anime not found" });
+
+        const isMovie = anime.format === 'MOVIE';
+        
+        // Loop through episodes and map them natively
+        const videos = [];
+        if (!isMovie && anime.episodes) {
+            for (let i = 1; i <= anime.episodes; i++) {
+                // Call our mapper helper to resolve long-runner absolute numbering
+                const mapping = getKitsuMapping(aniListId, 1, i);
+                
+                videos.push({
+                    id: `kitsu:${mapping.kitsuId}:${mapping.episode}`,
+                    title: `Episode ${i}`,
+                    season: 1,
+                    episode: i
+                });
+            }
+        }
+
+        const metaResponse = {
+            meta: {
+                id: `anilist:${anime.id}`,
+                type: isMovie ? 'movie' : 'series',
+                name: anime.title.english || anime.title.romaji,
+                genres: anime.genres,
+                poster: anime.coverImage.large,
+                background: anime.bannerImage || anime.coverImage.large,
+                description: anime.description,
+                videos: videos,
+                // Tell stream providers what IDs to look for
+                behaviorHints: {
+                    defaultVideoId: `kitsu:${getKitsuMapping(aniListId, 1, 1).kitsuId}:1`,
+                    hasStreams: false
+                }
+            }
+        };
+
+        // Cache for 24 hours
+        cache.set(`meta:${aniListId}`, metaResponse);
+        res.json(metaResponse);
+
+    } catch (error) {
+        console.error("Meta processing error:", error.message);
+        res.status(500).json({ error: "Internal server error" });
     }
-    return res.status(500).json({ error: err.message, id });
-  }
-
-  if (!data?.Media) {
-    return res.status(404).json({ error: `AniList ID ${aniListId} not found.` });
-  }
-
-  const media  = data.Media;
-  const format = media.format; // 'MOVIE' | 'TV' | 'TV_SHORT' | 'OVA' | 'SPECIAL' …
-
-  // Common fields shared by both movie and series responses
-  const base = {
-    id:          `anilist:${media.id}`,
-    name:        media.title.english || media.title.romaji,
-    description: media.description  || 'No description available.',
-    poster:      media.coverImage?.large || media.coverImage?.medium,
-    background:  media.bannerImage  || null,
-    genres:      media.genres       || [],
-    runtime:     media.duration     || null,
-    year:        media.seasonYear   || null,
-    ratings: {
-      anilist: media.averageScore || 0,
-      votes:   media.favourites   || 0,
-    },
-  };
-
-  let response;
-
-  // ------ MOVIE layout ----------------------------------------
-  if (format === 'MOVIE') {
-    console.log(`[META] MOVIE layout → ${base.name}`);
-    response = {
-      ...base,
-      type: 'movie',
-      // No videos array → Nuvio renders a single "Play" button
-      behaviorHints: {
-        defaultVideoId: `kitsu:${media.id}:0`,
-        isPlayable:     true,
-        hasTrailers:    false,
-      },
-    };
-
-  // ------ SERIES layout ---------------------------------------
-  } else {
-    console.log(`[META] SERIES layout → ${base.name}  (${media.episodes || '?'} eps)`);
-
-    const videos           = [];
-    const totalEps         = media.episodes || 0;
-    const ASSUMED_EPS_SEASON = 12;     // fallback season-length assumption
-    let   season           = 1;
-    let   epInSeason       = 1;
-
-    for (let absIdx = 1; absIdx <= totalEps; absIdx++) {
-      const map = getKitsuMapping(aniListId, season, epInSeason);
-
-      const videoId = map.fallback || !map.kitsuId
-        ? `anilist:${aniListId}:${absIdx}`          // fallback id
-        : `kitsu:${map.kitsuId}:${map.absoluteNumber}`;  // preferred id
-
-      videos.push({
-        id:          videoId,
-        title:       `Episode ${absIdx}`,
-        season:      season,
-        episode:     epInSeason,
-        releaseinfo: `S${season}E${epInSeason}`,
-      });
-
-      epInSeason++;
-      if (epInSeason > ASSUMED_EPS_SEASON) {
-        season++;
-        epInSeason = 1;
-      }
-    }
-
-    response = {
-      ...base,
-      type:         'series',
-      episodeCount: totalEps,
-      videos:       videos,
-      behaviorHints: {
-        defaultVideoId: videos.length > 0 ? videos[0].id : null,
-        isPlayable:     true,
-        hasTrailers:    false,
-        mappingMethod:  'anilist-kitsu',
-      },
-    };
-  }
-
-  // Cache and respond
-  cache.set(cacheKey, response);
-  console.log(`[META] Cached ${aniListId} (24 h TTL)`);
-  return res.json(response);
 });
 
-
-// ============================================================
-// 8. HEALTH + ERROR HANDLERS
-// ============================================================
-
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime() });
-});
-
-// 404 catch-all
-app.use((req, res) => {
-  console.warn(`[404] ${req.method} ${req.path}`);
-  res.status(404).json({ error: 'Not Found', path: req.path });
-});
-
-// Global error handler (Express 4 signature — 4 args required)
-// eslint-disable-next-line no-unused-vars
-app.use((err, req, res, next) => {
-  console.error('[ERROR]', err.message, err.stack);
-  res.status(err.statusCode || 500).json({
-    error:     'Server Error',
-    message:   err.message || 'Internal Server Error',
-    timestamp: new Date().toISOString(),
-  });
-});
-
-
-// ============================================================
-// 9. SERVER STARTUP
-// ============================================================
-
-// On Vercel / serverless the module is imported, not listened on.
-// The `if` guard ensures local `node index.js` still boots normally.
-if (process.env.NODE_ENV !== 'test') {
-  const server = app.listen(PORT, () => {
-    console.log(`
-╔══════════════════════════════════════════════╗
-║         AIO Anime Hub  –  Online             ║
-╠══════════════════════════════════════════════╣
-║  http://localhost:${PORT}/manifest.json         ║
-║  http://localhost:${PORT}/health                ║
-╚══════════════════════════════════════════════╝`);
-  });
-
-  process.on('SIGTERM', () => server.close(() => process.exit(0)));
-  process.on('SIGINT',  () => server.close(() => process.exit(0)));
-}
-
-// Export app for Vercel / testing
-module.exports = app;
-      
+// ==========================================
+// 8. HEALTH ROUTE & SERVER STARTUP
+// ==========================================
+app.get('/', (req, res) => res.json({ status: "ready", service: "AIO Anime Hub" }));
+app.listen(PORT, () => console.log(`Server executing seamlessly on port ${PORT}`));
