@@ -358,52 +358,54 @@ app.get('/manifest.json', (req, res) => {
 // ============================================================
 
 app.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
-  const { type, id, extra } = req.params;
-  console.log(`[CATALOG] type=${type}  id=${id}  extra=${extra || 'none'}`);
-
-  // --- Trending -------------------------------------------------
-  if (id === 'aio_trending_anime') {
-    try {
-      const data  = await queryAniList(TRENDING_QUERY);
-      const metas = (data.Page?.media || []).map(mediaToCatalogMeta);
-      console.log(`[TRENDING] ${metas.length} results`);
-      return res.json({ metas });
-    } catch (err) {
-      console.error('[TRENDING]', err.message);
-      return res.status(500).json({ metas: [], error: err.message });
-    }
-  }
-
-  // --- Search ---------------------------------------------------
-  if (id === 'aio_search_anime') {
-    // Parse search= from extra param, e.g. "search%3Dnaruto" → "naruto"
-    let searchTerm = '';
-    if (extra) {
-      const match = decodeURIComponent(extra).match(/search=([^&]+)/);
-      if (match) searchTerm = match[1].trim();
-    }
-
-    if (!searchTerm) {
-      return res.json({ metas: [] });
-    }
+    const { type, id, extra } = req.params;
+    console.log(`Catalog Request - ID: ${id}, Extra: ${extra}`);
 
     try {
-      const data  = await queryAniList(SEARCH_QUERY, { search: searchTerm });
-      const metas = (data.Page?.media || []).map(mediaToCatalogMeta);
-      console.log(`[SEARCH] "${searchTerm}" → ${metas.length} results`);
-      return res.json({ metas });
-    } catch (err) {
-      console.error('[SEARCH]', err.message);
-      return res.status(500).json({ metas: [], error: err.message });
-    }
-  }
+        let searchQuery = "";
+        
+        // Safely extract and decode the search query from Nuvio format
+        if (extra && extra.includes('search=')) {
+            const rawQuery = extra.split('search=')[1];
+            searchQuery = decodeURIComponent(rawQuery).replace(/\+/g, ' ');
+        }
 
-  // Unknown catalog id
-  return res.status(404).json({
-    metas: [],
-    error: `Unknown catalog id: ${id}`,
-  });
+        // GraphQL Query for AniList
+        const query = `
+          query ($search: String, $sort: [MediaSort]) {
+            Page (page: 1, perPage: 20) {
+              media (type: ANIME, search: $search, sort: $sort) {
+                id
+                title { romaji english }
+                coverImage { large }
+                format
+              }
+            }
+          }
+        `;
+
+        const variables = searchQuery 
+            ? { search: searchQuery } 
+            : { sort: ["TRENDING_DESC"] };
+
+        const response = await axios.post('https://anilist.co', { query, variables });
+        const animeList = response.data?.data?.Page?.media || [];
+
+        const metas = animeList.map(anime => ({
+            id: `anilist:${anime.id}`,
+            type: anime.format === 'MOVIE' ? 'movie' : 'series',
+            name: anime.title.english || anime.title.romaji,
+            poster: anime.coverImage.large
+        }));
+
+        res.json({ metas });
+
+    } catch (error) {
+        console.error("Catalog processing error:", error.message);
+        res.json({ metas: [] });
+    }
 });
+
 
 
 // ============================================================
