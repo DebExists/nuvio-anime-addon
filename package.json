@@ -1,0 +1,37 @@
+{
+  "name": "stremio-anime-metadata-addon",
+  "version": "1.0.0",
+  "description": "Advanced Anime Metadata Addon for Stremio with Kitsu/IMDb cross-referencing and absolute episode numbering",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "stremio",
+    "addon",
+    "anime",
+    "metadata",
+    "mal",
+    "kitsu",
+    "imdb",
+    "nuvio"
+  ],
+  "author": "Advanced Anime Community",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.8",
+    "stremio-addon-sdk": "^1.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "typescript": "^5.3.3",
+    "ts-node": "^10.9.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
