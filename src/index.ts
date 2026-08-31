@@ -836,5 +836,5 @@ async function fetchUpcomingAnime(page: number = 1): Promise<JikanAnime[]> {
 }
 
 const port: number = parseInt(process.env.PORT || '8000', 10);
-serveHTTP(builder.getInterface(), { port });
+serveHTTP(addon.getInterface(), { port });
 console.log(`Anime Addon running on cloud port ${port}`);
