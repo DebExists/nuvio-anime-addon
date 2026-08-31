@@ -1,0 +1,20 @@
+{
+  "name": "aio-anime-hub",
+  "version": "1.0.0",
+  "description": "Nuvio / Stremio-compatible AIO Anime metadata + Kitsu ID mapping add-on",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev":   "node index.js"
+  },
+  "dependencies": {
+    "express":    "^4.18.2",
+    "axios":      "^1.6.2",
+    "node-cache": "^5.1.2"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "license": "MIT"
+}
+
