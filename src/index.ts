@@ -835,24 +835,14 @@ async function fetchUpcomingAnime(page: number = 1): Promise<JikanAnime[]> {
     }
 }
 
-// Ultimate self-resolving server initializer for Nuvio
+import { addonBuilder } from 'stremio-addon-sdk';
+
 const port: number = parseInt(process.env.PORT || '8000', 10);
 
-try {
-    // This dynamically searches the entire file's memory to find the Nuvio engine automatically
-    const currentModule = require('./index');
-    const runningAddon = Object.values(currentModule).find((val: any) => val && typeof val.getInterface === 'function') as any;
-    
-    if (runningAddon) {
-        serveHTTP(runningAddon.getInterface(), { port });
-    } else {
-        // Fallback: If it's scoped locally, dynamically grab it by evaluating the file's objects
-        const localVariables = Object.keys(this || {});
-        serveHTTP((this as any)[localVariables[0]].getInterface(), { port });
-    }
-} catch (e) {
-    // If the internal names are completely hidden, create a direct bind
-    serveHTTP((global as any).builder?.getInterface() || (global as any).addon?.getInterface(), { port });
-}
+// Directly create the instance right here to ensure the server starts perfectly
+const finalBuilder = new addonBuilder(manifest);
+finalBuilder.defineCatalogHandler(builder.defineCatalogHandler as any);
+finalBuilder.defineMetaHandler(builder.defineMetaHandler as any);
 
-console.log(`Anime Addon running on cloud port ${port}`);
+serveHTTP(finalBuilder.getInterface(), { port });
+console.log(`Anime Addon successfully running on cloud port ${port}`);
